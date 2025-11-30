@@ -1,0 +1,11 @@
+{
+  "file_id": "F058",
+  "participant_id": "58",
+  "group_label": "beginner",
+  "group_label_raw": "beginner",
+  "sr_hz_used": 256,
+  "duration_s": 1.40625,
+  "good_window_frac": NaN,
+  "features_median": {},
+  "features_iqr": {}
+}

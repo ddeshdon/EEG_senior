@@ -1,0 +1,11 @@
+{
+  "file_id": "F054",
+  "participant_id": "54",
+  "group_label": "never_practiced",
+  "group_label_raw": "never_practiced",
+  "sr_hz_used": 1000,
+  "duration_s": 365.2569999694824,
+  "good_window_frac": 0.0,
+  "features_median": {},
+  "features_iqr": {}
+}

@@ -1,0 +1,19 @@
+{
+  "file_id": "F113",
+  "csv_path": "/Users/nannapatsatayarak/Documents/sr/FN-SMS/F113.csv",
+  "csv_sha1": "94b39d0b0fdd2b606e8305621565c05a70b1367e",
+  "schema_used": "raw",
+  "fs_used_hz": 1000,
+  "fs_inferred_hz": 1000.072484501669,
+  "duration_inferred_s": 372.42700004577637,
+  "min_duration_required_s": 180.0,
+  "bandpass_hz": [
+    1,
+    45
+  ],
+  "notch_hz": 50,
+  "window_len_s": 4.0,
+  "overlap": 0.5,
+  "artifact_rule": "amp>150uV OR |z|>5 OR rel(35-45)>0.5",
+  "good_window_frac": 0.06521739130434782
+}

@@ -1,0 +1,19 @@
+{
+  "file_id": "F071",
+  "csv_path": "/Users/nannapatsatayarak/Documents/sr/FN-SMS/F071.csv",
+  "csv_sha1": "e55062fa701c47b32faf63c10c8df7f8c8b714b1",
+  "schema_used": "raw",
+  "fs_used_hz": 1000,
+  "fs_inferred_hz": 999.8340882002384,
+  "duration_inferred_s": 608.7229998111725,
+  "min_duration_required_s": 180.0,
+  "bandpass_hz": [
+    1,
+    45
+  ],
+  "notch_hz": 50,
+  "window_len_s": 4.0,
+  "overlap": 0.5,
+  "artifact_rule": "amp>150uV OR |z|>5 OR rel(35-45)>0.5",
+  "good_window_frac": 0.02666666666666667
+}

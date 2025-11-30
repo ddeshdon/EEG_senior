@@ -1,0 +1,11 @@
+{
+  "file_id": "F066",
+  "participant_id": "66",
+  "group_label": "never_practiced",
+  "group_label_raw": "never_practiced",
+  "sr_hz_used": 1000,
+  "duration_s": 611.4260001182556,
+  "good_window_frac": 0.0,
+  "features_median": {},
+  "features_iqr": {}
+}

@@ -1,0 +1,10 @@
+{
+  "accuracy_mean": 0.6333333333333334,
+  "accuracy_std": 0.19436506316151003,
+  "balanced_accuracy_mean": 0.575,
+  "balanced_accuracy_std": 0.2318404623873926,
+  "f1_mean": 0.39333333333333337,
+  "f1_std": 0.3349295116554792,
+  "auc_mean": 0.5,
+  "auc_std": 0.30618621784789724
+}

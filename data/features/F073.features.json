@@ -1,0 +1,11 @@
+{
+  "file_id": "F073",
+  "participant_id": "73",
+  "group_label": "never_practiced",
+  "group_label_raw": "never_practiced",
+  "sr_hz_used": 256,
+  "duration_s": 2.6015625,
+  "good_window_frac": NaN,
+  "features_median": {},
+  "features_iqr": {}
+}

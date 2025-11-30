@@ -1,0 +1,11 @@
+{
+  "file_id": "F075",
+  "participant_id": "75",
+  "group_label": "trained_over_3_years",
+  "group_label_raw": "trained_over_3_years",
+  "sr_hz_used": 256,
+  "duration_s": 2.390625,
+  "good_window_frac": NaN,
+  "features_median": {},
+  "features_iqr": {}
+}
