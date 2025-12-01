@@ -10,13 +10,15 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy.signal import butter, filtfilt, iirnotch, welch
 
+import plotly.express as px
+
 # ==========================================================
 # CONFIG
 # ==========================================================
 
 MODEL_PATH = Path("models/experienced_catboost_model.joblib")
 TRAIN_WIDE_PATH = Path("data/features/features_wide.csv")
-UNI_PATH = Path("data/features/diagnosticsunivariate_binary.csv")  # your univariate CSV
+UNI_PATH = Path("data/features/diagnostics/univariate_binary.csv")  # your univariate CSV
 
 CHANS = ["TP9", "AF7", "AF8", "TP10"]
 ALIASES = {
@@ -419,6 +421,7 @@ def explain_prediction_for_top_features(feat_row: pd.Series, label: str, top_n: 
 
     target_class = 1 if label == "experienced" else 0
 
+    # sort features by global SHAP importance
     imp_list = sorted(
         [(f, shap_importance.get(f, 0.0)) for f in selected_features],
         key=lambda x: x[1],
@@ -432,9 +435,15 @@ def explain_prediction_for_top_features(feat_row: pd.Series, label: str, top_n: 
         if f not in feat_row.index or f not in train_wide.columns:
             continue
 
-        val = feat_row[f]
-        med0 = train_wide.loc[train_wide["binary_label"] == 0, f].median()
-        med1 = train_wide.loc[train_wide["binary_label"] == 1, f].median()
+        val = float(feat_row[f])
+        vals0 = train_wide.loc[train_wide["binary_label"] == 0, f].dropna()
+        vals1 = train_wide.loc[train_wide["binary_label"] == 1, f].dropna()
+
+        if vals0.empty or vals1.empty:
+            continue
+
+        med0 = float(vals0.median())
+        med1 = float(vals1.median())
 
         closer_to = 0 if abs(val - med0) < abs(val - med1) else 1
 
@@ -446,6 +455,35 @@ def explain_prediction_for_top_features(feat_row: pd.Series, label: str, top_n: 
             f"- Median experienced (1): `{med1:.4f}`"
         )
 
+        # 👉 Visualization: where does your value sit compared to both groups?
+        fig, ax = plt.subplots(figsize=(5, 2.5))
+
+        ax.hist(
+            vals0,
+            bins=20,
+            alpha=0.5,
+            density=True,
+            label="Class 0 (non-experienced)",
+        )
+        ax.hist(
+            vals1,
+            bins=20,
+            alpha=0.5,
+            density=True,
+            label="Class 1 (experienced)",
+        )
+
+        # your value as vertical dashed line
+        ax.axvline(val, color="k", linestyle="--", linewidth=2, label="Your value")
+
+        ax.set_xlabel("Feature value")
+        ax.set_ylabel("Density")
+        ax.legend(fontsize=7)
+        ax.grid(alpha=0.2)
+
+        st.pyplot(fig)
+
+        # textual interpretation
         if closer_to == target_class:
             st.success(
                 "This value is **closer to the predicted class**, so it *supports* the classification."
@@ -458,11 +496,14 @@ def explain_prediction_for_top_features(feat_row: pd.Series, label: str, top_n: 
         used += 1
 
 # ==========================================================
-# VISUALISATION: RAW / BAND TABLE
+# VISUALISATION: RAW / BAND TABLE (INTERACTIVE)
 # ==========================================================
 
 def plot_brainwaves_for_band_table(df: pd.DataFrame):
-    """Plot one curve per band (Delta/Theta/Alpha/Beta/Gamma), averaging across channels."""
+    """
+    Plot one curve per band (Delta/Theta/Alpha/Beta/Gamma), averaging across channels.
+    Interactive Plotly plot with zoom + range slider so small time fragments can be inspected.
+    """
     ts_col = None
     for c in df.columns:
         if c.lower() in ("timestamp", "time", "ts"):
@@ -483,13 +524,11 @@ def plot_brainwaves_for_band_table(df: pd.DataFrame):
         st.info("No band columns (Delta_, Theta_, etc.) found for plotting.")
         return
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-
+    rows = []
     for band in band_names:
         band_cols = [c for c in df.columns if c.startswith(band + "_") or c == band]
         vals = pd.to_numeric(df[band_cols], errors="coerce").to_numpy(float)
 
-        # average across any channels for that band
         if vals.ndim == 1:
             mean_vals = vals
         else:
@@ -498,22 +537,32 @@ def plot_brainwaves_for_band_table(df: pd.DataFrame):
         # z-score so all bands are in similar range
         mean_vals = (mean_vals - np.nanmean(mean_vals)) / (np.nanstd(mean_vals) + 1e-12)
 
-        ax.plot(t, mean_vals, label=band.capitalize())
+        for ti, v in zip(t, mean_vals):
+            rows.append({"time": ti, "band": band.capitalize(), "value": v})
 
-    ax.set_title("Absolute brain waves (per band, averaged across channels)")
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Relative power (z-score)")
-    ax.legend(title="Band")
-    st.pyplot(fig)
+    plot_df = pd.DataFrame(rows)
+
+    fig = px.line(
+        plot_df,
+        x="time",
+        y="value",
+        color="band",
+        title="Absolute brain waves (per band, averaged across channels)",
+        labels={"time": "Time", "value": "Relative power (z-score)", "band": "Band"},
+    )
+    fig.update_layout(xaxis_rangeslider_visible=True)
+    st.plotly_chart(fig, use_container_width=True)
+
 
 def plot_brainwaves_from_raw(df: pd.DataFrame):
     """
     From raw Muse EEG (TP9/AF7/AF8/TP10) compute band power time series
-    and plot one curve per band (Delta / Theta / Alpha / Beta / Gamma),
+    and plot one curve per band (Delta / Theta / Alpha / Beta),
     averaged across the four channels.
+    Interactive Plotly plot with zoom + range slider.
     """
     fs, _ = infer_fs_duration(df)
-    df_raw = map_raw(df)                # still uses TP9 / AF7 / AF8 / TP10
+    df_raw = map_raw(df)
     X = df_raw[CHANS].to_numpy(float)
 
     # demean + filter same as feature extraction
@@ -545,9 +594,8 @@ def plot_brainwaves_from_raw(df: pd.DataFrame):
                 bp_ch.append(bandpower(W[:, ci], fs, fmin, fmax))
             band_series[band].append(float(np.nanmean(bp_ch)))
 
+    rows = []
     t = np.array(times)
-    fig, ax = plt.subplots(figsize=(8, 4))
-
     for band, vals in band_series.items():
         vals = np.array(vals, dtype=float)
         if vals.size == 0 or np.all(~np.isfinite(vals)):
@@ -555,27 +603,46 @@ def plot_brainwaves_from_raw(df: pd.DataFrame):
 
         # z-score each band so curves overlay nicely
         vals = (vals - np.nanmean(vals)) / (np.nanstd(vals) + 1e-12)
-        ax.plot(t, vals, label=band.capitalize())
+        for ti, v in zip(t, vals):
+            rows.append({"time": ti, "band": band.capitalize(), "value": v})
 
-    ax.set_title("Absolute brain waves (TP9 / AF7 / AF8 / TP10 → per-band power)")
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Relative power (z-score)")
-    ax.legend(title="Band")
-    st.pyplot(fig)
+    if not rows:
+        st.info("Not enough data to compute band powers for plotting.")
+        return
 
+    plot_df = pd.DataFrame(rows)
 
+    fig = px.line(
+        plot_df,
+        x="time",
+        y="value",
+        color="band",
+        title="Absolute brain waves (TP9 / AF7 / AF8 / TP10 → per-band power)",
+        labels={"time": "Time (s)", "value": "Relative power (z-score)", "band": "Band"},
+    )
+    fig.update_layout(xaxis_rangeslider_visible=True)
+    st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================================
 # PAGES
 # ==========================================================
 
 def page_predict():
-    st.title("🧠 Predict EEG Meditation Class")
+    st.title("🧠 Meditation EEG Classifier")
+
+    st.markdown(
+        "Upload an EEG recording to estimate whether the pattern looks more like "
+        "**non-experienced** or **experienced** meditators.\n\n"
+        "Supported formats:\n"
+        "- Raw Muse CSV (TP9 / AF7 / AF8 / TP10)\n"
+        "- Band-power table (e.g., `Delta_TP9`, `Theta_AF7`, ...)\n"
+        "- Feature row with the same columns as the trained model\n"
+    )
 
     uploaded = st.file_uploader("Upload EEG CSV file", type=["csv"])
 
     if not uploaded:
-        st.info("Upload a raw Muse CSV, band-power table, or feature row to start.")
+        st.info("⬆️ Upload a raw Muse CSV, band-power table, or feature row to start.")
         return
 
     try:
@@ -587,6 +654,8 @@ def page_predict():
     mode = detect_mode(df)
 
     st.subheader("Brainwave signal preview")
+    st.caption("Interactive plot: drag to zoom, use the range slider to inspect small time fragments.")
+
     if mode == "band_table":
         plot_brainwaves_for_band_table(df)
     elif mode == "raw":
@@ -595,7 +664,6 @@ def page_predict():
         st.info("File already contains features; skipping raw signal plot.")
     else:
         st.warning("Unrecognised format for plotting.")
-
 
 
     # feature extraction
@@ -625,16 +693,36 @@ def page_predict():
     label, prob_dict = run_prediction(feat_row)
 
     st.subheader("Prediction")
-    st.markdown(
-        f"**Predicted class:** `{label}`  \n"
-        f"Probability: `{prob_dict.get(label, 0.0):.3f}`"
-    )
-    prob_df = pd.DataFrame(
-        {"class": list(prob_dict.keys()), "probability": list(prob_dict.values())}
-    )
-    st.table(prob_df)
 
-    # explanation
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.markdown(
+            f"**Predicted class:** `{label}`  \n"
+            f"Model confidence for this class: `{prob_dict.get(label, 0.0):.3f}`"
+        )
+        with col2:
+            prob_df = pd.DataFrame(
+                {"class": list(prob_dict.keys()), "probability": list(prob_dict.values())}
+            ).sort_values("probability", ascending=False)
+
+            fig = px.bar(
+                prob_df,
+                x="class",
+                y="probability",
+                title="Class probabilities",
+                labels={"class": "Class", "probability": "Predicted probability"},
+            )
+        # Make sure x-axis labels are horizontal
+            fig.update_layout(
+                xaxis_tickangle=0,
+                yaxis_range=[0, 1],  # optional, keeps scale 0–1
+                height=250,
+                margin=dict(t=40, b=40, l=40, r=10),
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+
     st.subheader("Why did the model predict this class?")
     st.markdown(
         "We compare your feature values with the training distributions for the most "
@@ -642,16 +730,32 @@ def page_predict():
     )
     explain_prediction_for_top_features(feat_row, label, top_n=5)
 
+    # --------------------------------------------------------------
+    # Optional analysis sections (for presentation / experts)
+    # --------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🔎 Optional: model & feature analysis (for interpretation)")
 
-def page_feature_summary():
-    st.title("📊 Model Feature Importance (SHAP)")
+    with st.expander("Global model feature importance (SHAP)", expanded=False):
+        page_feature_summary(embedded=True)
+
+    with st.expander("Univariate group differences (Cliff's δ, Mann–Whitney)", expanded=False):
+        page_univariate(embedded=True)
+
+# ==========================================================
+# ANALYSIS SECTIONS (EMBEDDABLE)
+# ==========================================================
+
+def page_feature_summary(embedded: bool = False):
+    if not embedded:
+        st.title("📊 Model Feature Importance (SHAP)")
 
     if train_wide is None:
         st.error("Training dataset not found. Cannot show summary.")
         return
 
     st.markdown(
-        "This page shows **global feature importance** from the CatBoost model "
+        "This section shows **global feature importance** from the CatBoost model "
         "(SHAP values averaged across all samples) and how these features "
         "are distributed in non-experienced vs experienced meditators."
     )
@@ -677,6 +781,7 @@ def page_feature_summary():
         3,
         min(10, len(imp_df)),
         6,
+        key="shap_top_n",
     )
 
     top_feats = imp_df["feature"].iloc[:top_n].tolist()
@@ -704,8 +809,9 @@ def page_feature_summary():
         )
 
 
-def page_univariate():
-    st.title("📈 Univariate Feature Analysis (Cliff's δ, Mann–Whitney)")
+def page_univariate(embedded: bool = False):
+    if not embedded:
+        st.title("📈 Univariate Feature Analysis (Cliff's δ, Mann–Whitney)")
 
     if uni_df is None:
         st.error(
@@ -722,7 +828,7 @@ def page_univariate():
         return
 
     st.markdown(
-        "This page summarises **univariate group differences** between:\n"
+        "This section summarises **univariate group differences** between:\n"
         "- **NEG** (non-experienced, label 0) and  \n"
         "- **POS** (experienced, label 1)\n\n"
         "Statistics shown:\n"
@@ -748,6 +854,7 @@ def page_univariate():
         3,
         min(10, len(uni_sorted)),
         5,
+        key="uni_top_k",
     )
 
     # simple helper for effect size label
@@ -821,22 +928,21 @@ def page_univariate():
 
         st.markdown("---")
 
-
 # ==========================================================
 # MAIN
 # ==========================================================
 
 def main():
-    page = st.sidebar.radio(
-        "Navigation",
-        ["Predict EEG Class", "Model Feature Importance", "Univariate Analysis"],
+    st.sidebar.title("Meditation EEG Classifier")
+    st.sidebar.markdown(
+        "1. Upload an EEG CSV.\n"
+        "2. Inspect the brainwave preview.\n"
+        "3. See the predicted meditation experience class.\n\n"
+        "_Advanced analysis (SHAP & univariate stats) is available as optional sections "
+        "below the prediction for expert users and for your presentation._"
     )
-    if page == "Predict EEG Class":
-        page_predict()
-    elif page == "Model Feature Importance":
-        page_feature_summary()
-    else:
-        page_univariate()
+
+    page_predict()
 
 
 if __name__ == "__main__":
