@@ -11,6 +11,7 @@ from pathlib import Path
 from scipy.signal import butter, filtfilt, iirnotch, welch
 
 import plotly.express as px
+import plotly.graph_objects as go
 
 # ==========================================================
 # CONFIG
@@ -18,7 +19,7 @@ import plotly.express as px
 
 MODEL_PATH = Path("models/experienced_catboost_model.joblib")
 TRAIN_WIDE_PATH = Path("data/features/features_wide.csv")
-UNI_PATH = Path("data/features/diagnostics/univariate_binary.csv")  # your univariate CSV
+UNI_PATH = Path("data/features/diagnostics/univariate_binary.csv")
 
 CHANS = ["TP9", "AF7", "AF8", "TP10"]
 ALIASES = {
@@ -411,8 +412,15 @@ def describe_feature_name(f: str) -> str:
 
 
 def explain_prediction_for_top_features(feat_row: pd.Series, label: str, top_n: int = 5):
+    """
+    For the most important features, show:
+    - your value
+    - medians of each group
+    - a 0–1 straight-line gauge where 0 = non-experienced, 1 = experienced.
+    The percentage text is rendered *below* the chart to avoid clipping.
+    """
     if train_wide is None:
-        st.info("Training dataset not available → cannot show distribution-based explanation.")
+        st.info("Training dataset not available → cannot show feature-level explanation.")
         return
 
     if label not in ("non_experienced", "experienced"):
@@ -421,7 +429,7 @@ def explain_prediction_for_top_features(feat_row: pd.Series, label: str, top_n: 
 
     target_class = 1 if label == "experienced" else 0
 
-    # sort features by global SHAP importance
+    # sort features by global SHAP importance (most important first)
     imp_list = sorted(
         [(f, shap_importance.get(f, 0.0)) for f in selected_features],
         key=lambda x: x[1],
@@ -435,62 +443,97 @@ def explain_prediction_for_top_features(feat_row: pd.Series, label: str, top_n: 
         if f not in feat_row.index or f not in train_wide.columns:
             continue
 
+        # your value
         val = float(feat_row[f])
+
+        # medians of each group
         vals0 = train_wide.loc[train_wide["binary_label"] == 0, f].dropna()
         vals1 = train_wide.loc[train_wide["binary_label"] == 1, f].dropna()
-
         if vals0.empty or vals1.empty:
             continue
 
         med0 = float(vals0.median())
         med1 = float(vals1.median())
 
-        closer_to = 0 if abs(val - med0) < abs(val - med1) else 1
+        # distances to each median
+        d0 = abs(val - med0)
+        d1 = abs(val - med1)
+
+        # convert into "experienced score" between 0 and 1
+        eps = 1e-9
+        s0 = 1.0 / (d0 + eps)
+        s1 = 1.0 / (d1 + eps)
+        total = s0 + s1
+        exp_score = s1 / total     # 0 = fully non-exp, 1 = fully exp
+        closer_to = 0 if d0 <= d1 else 1
 
         st.markdown(f"### 🔍 {f}")
         st.write(f"**What this feature is about:** {describe_feature_name(f)}")
-        st.write(
+
+        st.markdown(
             f"- Your value: `{val:.4f}`  \n"
             f"- Median non-experienced (0): `{med0:.4f}`  \n"
             f"- Median experienced (1): `{med1:.4f}`"
         )
 
-        # 👉 Visualization: where does your value sit compared to both groups?
-        fig, ax = plt.subplots(figsize=(5, 2.5))
+        # ---------- straight-line gauge (no internal text) ----------
+        fig = go.Figure()
 
-        ax.hist(
-            vals0,
-            bins=20,
-            alpha=0.5,
-            density=True,
-            label="Class 0 (non-experienced)",
-        )
-        ax.hist(
-            vals1,
-            bins=20,
-            alpha=0.5,
-            density=True,
-            label="Class 1 (experienced)",
+        # base line at y = 0.5
+        fig.add_shape(
+            type="line",
+            x0=0,
+            y0=0.5,
+            x1=1,
+            y1=0.5,
+            line=dict(width=8),
         )
 
-        # your value as vertical dashed line
-        ax.axvline(val, color="k", linestyle="--", linewidth=2, label="Your value")
+        # marker only
+        fig.add_trace(
+            go.Scatter(
+                x=[exp_score],
+                y=[0.5],
+                mode="markers",
+                marker=dict(size=18),
+                showlegend=False,
+            )
+        )
 
-        ax.set_xlabel("Feature value")
-        ax.set_ylabel("Density")
-        ax.legend(fontsize=7)
-        ax.grid(alpha=0.2)
+        fig.update_xaxes(
+            range=[0, 1],
+            showgrid=False,
+            tickvals=[0, 1],
+            ticktext=["0 = non-experienced", "1 = experienced"],
+            title_text="Leaning toward which group?",
+        )
+        fig.update_yaxes(visible=False, range=[0, 1])
 
-        st.pyplot(fig)
+        fig.update_layout(
+            height=90,
+            margin=dict(l=30, r=30, t=10, b=25),
+        )
 
-        # textual interpretation
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        # percentage text BELOW the chart (so Streamlit never clips it)
+        st.markdown(
+            f"<div style='text-align:center; font-size:0.9rem;'>"
+            f"Gauge reading: <b>{exp_score*100:.0f}%</b> closer to <b>experienced (1)</b>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ---------- short text verdict ----------
         if closer_to == target_class:
             st.success(
-                "This value is **closer to the predicted class**, so it *supports* the classification."
+                "For this feature, your value is **closer to the predicted class**, "
+                "so it *supports* the prediction."
             )
         else:
             st.warning(
-                "This value is **closer to the opposite class**, so it partly *contradicts* the prediction."
+                "For this feature, your value is **closer to the opposite class**, "
+                "so it partly *disagrees* with the prediction."
             )
 
         used += 1
@@ -515,10 +558,7 @@ def plot_brainwaves_for_band_table(df: pd.DataFrame):
     else:
         t = np.arange(len(df))
 
-    # find which bands actually exist in the table
-    band_names = sorted(
-        {c.split("_")[0] for c in df.columns if "_" in c}
-    )
+    band_names = sorted({c.split("_")[0] for c in df.columns if "_" in c})
     band_names = [b for b in band_names if b.lower() in BANDS.keys()]
     if not band_names:
         st.info("No band columns (Delta_, Theta_, etc.) found for plotting.")
@@ -534,7 +574,6 @@ def plot_brainwaves_for_band_table(df: pd.DataFrame):
         else:
             mean_vals = np.nanmean(vals, axis=1)
 
-        # z-score so all bands are in similar range
         mean_vals = (mean_vals - np.nanmean(mean_vals)) / (np.nanstd(mean_vals) + 1e-12)
 
         for ti, v in zip(t, mean_vals):
@@ -550,28 +589,27 @@ def plot_brainwaves_for_band_table(df: pd.DataFrame):
         title="Absolute brain waves (per band, averaged across channels)",
         labels={"time": "Time", "value": "Relative power (z-score)", "band": "Band"},
     )
-    fig.update_layout(xaxis_rangeslider_visible=True)
+    fig.update_layout(
+        xaxis_rangeslider_visible=True,
+        height=350,
+        margin=dict(l=40, r=20, t=40, b=40),
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 
 def plot_brainwaves_from_raw(df: pd.DataFrame):
     """
-    From raw Muse EEG (TP9/AF7/AF8/TP10) compute band power time series
-    and plot one curve per band (Delta / Theta / Alpha / Beta),
-    averaged across the four channels.
-    Interactive Plotly plot with zoom + range slider.
+    From raw Muse EEG compute band power time series and plot one curve per band.
     """
     fs, _ = infer_fs_duration(df)
     df_raw = map_raw(df)
     X = df_raw[CHANS].to_numpy(float)
 
-    # demean + filter same as feature extraction
     X = X - np.nanmean(X, axis=0)
     Xf = apply_filters(X, fs)
 
-    # sliding windows to get a smooth time series
-    win_s = 1.0        # 1-second window
-    step_s = 0.5       # 0.5-second step
+    win_s = 1.0
+    step_s = 0.5
     wlen = int(win_s * fs)
     step = max(1, int(step_s * fs))
     if wlen >= len(Xf):
@@ -587,7 +625,6 @@ def plot_brainwaves_from_raw(df: pd.DataFrame):
         t_center = (s + e) / (2 * fs)
         times.append(t_center)
 
-        # band power for each band, averaged across channels
         for band, (fmin, fmax) in BANDS.items():
             bp_ch = []
             for ci in range(W.shape[1]):
@@ -601,7 +638,6 @@ def plot_brainwaves_from_raw(df: pd.DataFrame):
         if vals.size == 0 or np.all(~np.isfinite(vals)):
             continue
 
-        # z-score each band so curves overlay nicely
         vals = (vals - np.nanmean(vals)) / (np.nanstd(vals) + 1e-12)
         for ti, v in zip(t, vals):
             rows.append({"time": ti, "band": band.capitalize(), "value": v})
@@ -620,7 +656,11 @@ def plot_brainwaves_from_raw(df: pd.DataFrame):
         title="Absolute brain waves (TP9 / AF7 / AF8 / TP10 → per-band power)",
         labels={"time": "Time (s)", "value": "Relative power (z-score)", "band": "Band"},
     )
-    fig.update_layout(xaxis_rangeslider_visible=True)
+    fig.update_layout(
+        xaxis_rangeslider_visible=True,
+        height=350,
+        margin=dict(l=40, r=20, t=40, b=40),
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================================
@@ -665,7 +705,6 @@ def page_predict():
     else:
         st.warning("Unrecognised format for plotting.")
 
-
     # feature extraction
     if mode == "raw":
         st.info("Detected raw Muse EEG → extracting features…")
@@ -700,34 +739,35 @@ def page_predict():
             f"**Predicted class:** `{label}`  \n"
             f"Model confidence for this class: `{prob_dict.get(label, 0.0):.3f}`"
         )
-        with col2:
-            prob_df = pd.DataFrame(
-                {"class": list(prob_dict.keys()), "probability": list(prob_dict.values())}
-            ).sort_values("probability", ascending=False)
+    with col2:
+        prob_df = pd.DataFrame(
+            {"class": list(prob_dict.keys()), "probability": list(prob_dict.values())}
+        ).sort_values("probability", ascending=False)
 
-            fig = px.bar(
-                prob_df,
-                x="class",
-                y="probability",
-                title="Class probabilities",
-                labels={"class": "Class", "probability": "Predicted probability"},
-            )
-        # Make sure x-axis labels are horizontal
-            fig.update_layout(
-                xaxis_tickangle=0,
-                yaxis_range=[0, 1],  # optional, keeps scale 0–1
-                height=250,
-                margin=dict(t=40, b=40, l=40, r=10),
-            )
+        fig = px.bar(
+            prob_df,
+            x="class",
+            y="probability",
+            title="Class probabilities",
+            labels={"class": "Class", "probability": "Predicted probability"},
+        )
+        fig.update_layout(
+            xaxis_tickangle=0,
+            yaxis_range=[0, 1],
+            height=250,
+            margin=dict(t=40, b=40, l=40, r=10),
+        )
 
-            st.plotly_chart(fig, use_container_width=True)
-
+        st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Why did the model predict this class?")
     st.markdown(
-        "We compare your feature values with the training distributions for the most "
-        "important EEG features and indicate whether they support or contradict the prediction."
+        "For the most important EEG features, we compare **your value** with the "
+        "median of each group and show a simple **straight-line gauge**:  \n"
+        "0 = non-experienced, 1 = experienced. The marker shows which side your "
+        "feature leans toward."
     )
+
     explain_prediction_for_top_features(feat_row, label, top_n=5)
 
     # --------------------------------------------------------------
@@ -859,7 +899,6 @@ def page_univariate(embedded: bool = False):
 
     # simple helper for effect size label
     def effect_size_label(delta_abs: float) -> str:
-        # conventional Cliff's delta thresholds
         if delta_abs < 0.147:
             return "negligible"
         elif delta_abs < 0.33:
@@ -887,16 +926,14 @@ def page_univariate(embedded: bool = False):
         st.markdown(f"### 🔍 {f}")
         st.write(f"**What this feature is about:** {describe_feature_name(f)}")
 
-        # --- Boxplot by binary_label (0=NEG, 1=POS) ---
         fig, ax = plt.subplots(figsize=(6, 3))
         train_wide.boxplot(column=f, by="binary_label", ax=ax)
         ax.set_title(f"{f} — distribution by class (NEG=0, POS=1)")
         ax.set_xlabel("Class (0 = non-experienced, 1 = experienced)")
         ax.set_ylabel("Feature value")
-        plt.suptitle("")  # remove automatic super-title from pandas
+        plt.suptitle("")
         st.pyplot(fig)
 
-        # --- Numeric summary ---
         st.markdown(
             f"- Cliff's δ: `{cd:.2f}` (**{es_label} effect**)  \n"
             f"- p (Mann–Whitney): `{p:.3f}`  \n"
@@ -904,7 +941,6 @@ def page_univariate(embedded: bool = False):
             f"- Median POS (1): `{med_pos:.4f}`"
         )
 
-        # --- Interpretation ---
         if med_pos > med_neg:
             higher_group = "experienced (POS, label 1)"
         elif med_pos < med_neg:
