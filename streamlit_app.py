@@ -479,41 +479,64 @@ def explain_prediction_for_top_features(feat_row: pd.Series, label: str, top_n: 
         # ---------- straight-line gauge (no internal text) ----------
         fig = go.Figure()
 
-        # base line at y = 0.5
+        # marker first (will be drawn on top)
+        fig.add_trace(
+            go.Scatter(
+                x=[exp_score],
+                y=[0.5],
+                mode="markers",
+                marker=dict(size=20, color="#1E90FF", line=dict(color="white", width=2)),
+                showlegend=False,
+            )
+        )
+
+        # base line at y = 0.5 (drawn after marker, but behind it in z-order)
         fig.add_shape(
             type="line",
             x0=0,
             y0=0.5,
             x1=1,
             y1=0.5,
-            line=dict(width=8),
+            line=dict(width=8, color="#333333"),
+            layer="below",
         )
 
-        # marker only
-        fig.add_trace(
-            go.Scatter(
-                x=[exp_score],
-                y=[0.5],
-                mode="markers",
-                marker=dict(size=18),
-                showlegend=False,
-            )
+        # Add text annotations for left and right labels
+        fig.add_annotation(
+            x=0,
+            y=0.5,
+            text="Non-experienced (0)",
+            showarrow=False,
+            yshift=30,
+            font=dict(size=14, color="white"),
+            xanchor="left",
+        )
+        
+        fig.add_annotation(
+            x=1,
+            y=0.5,
+            text="Experienced (1)",
+            showarrow=False,
+            yshift=30,
+            font=dict(size=14, color="white"),
+            xanchor="right",
         )
 
         fig.update_xaxes(
             range=[0, 1],
             showgrid=False,
-            tickvals=[0, 1],
-            ticktext=["0 = non-experienced", "1 = experienced"],
-            title_text="Leaning toward which group?",
+            showticklabels=False,
+            title_text="",
         )
         fig.update_yaxes(visible=False, range=[0, 1])
 
         fig.update_layout(
-            height=90,
-            margin=dict(l=30, r=30, t=10, b=25),
+            height=120,
+            margin=dict(l=30, r=30, t=50, b=20),
         )
 
+        # Add title above the chart instead of inside it
+        st.markdown("<div style='text-align: center;'><b>Leaning toward which group?</b></div>", unsafe_allow_html=True)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
         # percentage text BELOW the chart (so Streamlit never clips it)
